@@ -10,53 +10,60 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// CONFIGURACIÓN SUPABASE
 const supabase = createClient('https://lnjanjvnwjccfstmmtuo.supabase.co', 'sb_secret_7LpsFc69GTqOeQP-mfxivw_96rPlBSL');
 
+// BUSCAR
 app.get('/search', async (req, res) => {
     const query = req.query.q;
+    console.log(">>> Buscando:", query);
     try {
         const videos = await YouTube.search(query, { limit: 10, type: 'video' });
         const results = videos.map(v => ({
             title: v.title,
-            thumbnail: v.thumbnail.url,
-            // Capturamos el nombre del canal aquí
+            thumbnail: v.thumbnail ? v.thumbnail.url : "",
             channel: v.channel ? v.channel.name : "YouTube Artist",
             url: v.url
         }));
         res.json(results);
     } catch (err) {
+        console.error("Error búsqueda:", err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
+// DESCARGAR Y SUBIR
 app.post('/download', async (req, res) => {
-    const { title, artist, image } = req.body;
+    const { title, artist, image, url } = req.body; // <-- 'url' es vital
     const uniqueId = Date.now();
-    const tempName = `temp_${uniqueId}`;
+    const outputFile = path.join(__dirname, `temp_${uniqueId}.mp3`);
+
+    console.log(">>> Descargando:", title);
 
     try {
-        const command = `yt-dlp -x --audio-format mp3 --ffmpeg-location /usr/bin/ffmpeg -o "${outputFile}" ${videoUrl}`;
+        // Usamos la URL directa que viene del search
+        const videoUrl = url || `ytsearch1:"${title} ${artist}"`;
+        
+        // El comando corregido (asegúrate de que ffmpeg esté en /usr/bin/ffmpeg)
+        const command = `yt-dlp -x --audio-format mp3 --ffmpeg-location /usr/bin/ffmpeg -o "${outputFile}" "${videoUrl}"`;
 
         exec(command, async (error, stdout, stderr) => {
             if (error) {
+                console.error("Error yt-dlp:", error.message);
                 return res.status(500).json({ error: error.message });
             }
 
             try {
-                const files = fs.readdirSync(__dirname);
-                const downloadedFile = files.find(f => f.startsWith(tempName));
+                if (!fs.existsSync(outputFile)) throw new Error("El archivo MP3 no se generó.");
 
-                if (!downloadedFile) throw new Error("Archivo no encontrado");
+                const fileBuffer = fs.readFileSync(outputFile);
+                const finalName = `music_${uniqueId}.mp3`;
 
-                const filePath = path.join(__dirname, downloadedFile);
-                const fileBuffer = fs.readFileSync(filePath);
-                const ext = path.extname(downloadedFile);
-                const finalName = `hq_${uniqueId}${ext}`;
-
+                console.log(">>> Subiendo a Supabase...");
                 const { error: uploadError } = await supabase.storage
-                    .from('Musics')
+                    .from('Musics') // <-- Revisa que el bucket se llame exactamente 'Musics'
                     .upload(`scraped/${finalName}`, fileBuffer, { 
-                        contentType: ext === '.m4a' ? 'audio/mp4' : 'audio/webm',
+                        contentType: 'audio/mpeg',
                         upsert: true
                     });
 
@@ -64,17 +71,24 @@ app.post('/download', async (req, res) => {
 
                 const { data: urlData } = supabase.storage.from('Musics').getPublicUrl(`scraped/${finalName}`);
 
-                await supabase.from('songs').insert([{
+                console.log(">>> Guardando en DB...");
+                const { error: dbError } = await supabase.from('songs').insert([{
                     title, 
                     artist, 
                     image_url: image, 
                     audio_url: urlData.publicUrl
                 }]);
 
-                fs.unlinkSync(filePath);
-                res.json({ success: true });
+                if (dbError) throw dbError;
+
+                // Limpieza
+                fs.unlinkSync(outputFile);
+                console.log(">>> ¡Éxito total!");
+                res.json({ success: true, url: urlData.publicUrl });
 
             } catch (err) {
+                if (fs.existsSync(outputFile)) fs.unlinkSync(outputFile);
+                console.error("Error proceso:", err.message);
                 res.status(500).json({ error: err.message });
             }
         });
@@ -83,4 +97,4 @@ app.post('/download', async (req, res) => {
     }
 });
 
-app.listen(3000, () => console.log('Servidor 320kbps listo en puerto 3000'));
+app.listen(3000, () => console.log('>>> Servidor 24/7 en puerto 3000'));
