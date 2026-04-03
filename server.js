@@ -22,7 +22,7 @@ app.get('/search', (req, res) => {
     if (!query) return res.status(400).send('Falta la búsqueda');
 
     // En Linux usamos yt-dlp a secas
-const command = `./yt-dlp "ytsearch5:${query}" --get-title --get-id --get-thumbnail --print "%(uploader)s" --j`;
+const command = `./yt-dlp "ytsearch5:${query}" --dump-json --no-playlist --flat-playlist`;
     
     exec(command, (error, stdout) => {
         if (error) return res.status(500).json({ error: error.message });
