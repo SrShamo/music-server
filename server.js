@@ -6,75 +6,70 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-// Render asigna el puerto automáticamente, por eso usamos process.env.PORT
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 app.use(cors());
 app.use(express.json());
 
+// CONFIGURACIÓN SUPABASE
 const supabaseUrl = 'https://lnjanjvnwjccfstmmtuo.supabase.co';
-const supabaseKey = 'sb_publishable_dpkjAjSKx1cgxczcjSbSAw_Arib-u0G'; // Usa tu Service Role Key si da error de permisos
+const supabaseKey = 'sb_publishable_dpkjAjSKx1cgxczcjSbSAw_Arib-u0G'; 
 const _supabase = createClient(supabaseUrl, supabaseKey);
 
-// RUTA DE BÚSQUEDA
+console.log(">>> SISTEMA INICIADO EN PUERTO:", PORT);
+
+app.get('/', (req, res) => res.send("Servidor Activo 🚀"));
+
+// BUSCAR
 app.get('/search', (req, res) => {
     const query = req.query.q;
-    if (!query) return res.status(400).send('Falta la búsqueda');
-
-    // En Linux usamos yt-dlp a secas
-const command = `./yt-dlp "ytsearch5:${query}" --dump-json --no-playlist --flat-playlist`;
+    console.log(">>> PETICIÓN DE BÚSQUEDA:", query);
+    
+    const command = `./yt-dlp "ytsearch5:${query}" --dump-json --no-playlist --flat-playlist`;
     
     exec(command, (error, stdout) => {
-        if (error) return res.status(500).json({ error: error.message });
-        
-        const lines = stdout.trim().split('\n');
-        const results = lines.map(line => {
-            const data = JSON.parse(line);
-            return {
-                title: data.title,
-                id: data.id,
-                thumbnail: data.thumbnail,
-                channel: data.uploader,
-                url: `https://www.youtube.com/watch?v=${data.id}`
-            };
-        });
+        if (error) {
+            console.error(">>> ERROR EN BÚSQUEDA:", error.message);
+            return res.status(500).json({ error: error.message });
+        }
+        const results = stdout.trim().split('\n').map(line => JSON.parse(line));
+        console.log(">>> BÚSQUEDA EXITOSA");
         res.json(results);
     });
 });
 
-// RUTA DE DESCARGA Y SUBIDA
+// DESCARGAR
 app.post('/download', async (req, res) => {
     const { title, artist, image } = req.body;
+    console.log(">>> INICIANDO DESCARGA PARA:", title);
+
     const videoUrl = `ytsearch1:"${title} ${artist}"`;
     const fileName = `${Date.now()}.mp3`;
     const outputFile = path.join('/tmp', fileName);
 
-    // USAMOS EL FFMPEG LOCAL (./ffmpeg)
-    const command = `./yt-dlp -x --audio-format mp3 --ffmpeg-location ./ffmpeg -o "${outputFile}" ${videoUrl}`;
-
-    console.log("Descargando:", title);
+    // Intentamos descargar directo (Render suele tener ffmpeg en el sistema por defecto)
+    const command = `./yt-dlp -x --audio-format mp3 -o "${outputFile}" ${videoUrl}`;
 
     exec(command, async (error) => {
         if (error) {
-            console.error("Error yt-dlp:", error.message);
+            console.error(">>> ERROR DESCARGANDO:", error.message);
             return res.status(500).json({ error: error.message });
         }
 
         try {
+            console.log(">>> LEYENDO ARCHIVO DE /tmp...");
             const fileBuffer = fs.readFileSync(outputFile);
-            console.log("Subiendo a Supabase...");
 
-            const { data, error: uploadError } = await _supabase.storage
+            console.log(">>> SUBIENDO A SUPABASE STORAGE...");
+            const { error: uploadError } = await _supabase.storage
                 .from('songs')
-                .upload(`audios/${fileName}`, fileBuffer, { 
-                    contentType: 'audio/mpeg',
-                    upsert: true 
-                });
+                .upload(`audios/${fileName}`, fileBuffer, { contentType: 'audio/mpeg' });
 
             if (uploadError) throw uploadError;
 
             const { data: { publicUrl } } = _supabase.storage.from('songs').getPublicUrl(`audios/${fileName}`);
 
+            console.log(">>> GUARDANDO EN BASE DE DATOS...");
             const { error: dbError } = await _supabase.from('songs').insert([
                 { title, artist, image_url: image, audio_url: publicUrl }
             ]);
@@ -82,16 +77,16 @@ app.post('/download', async (req, res) => {
             if (dbError) throw dbError;
 
             fs.unlinkSync(outputFile);
-            console.log("¡Todo listo!");
+            console.log(">>> ¡TODO COMPLETADO CON ÉXITO!");
             res.json({ success: true, url: publicUrl });
 
         } catch (err) {
-            console.error("Error proceso:", err.message);
+            console.error(">>> ERROR EN PROCESO POST-DESCARGA:", err.message);
             res.status(500).json({ error: err.message });
         }
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`Servidor corriendo en el puerto ${PORT}`);
+    console.log(`>>> ESCUCHANDO EN PUERTO ${PORT}`);
 });
