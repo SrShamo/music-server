@@ -1,9 +1,10 @@
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { exec } = require('child_process');
+const ytdl = require('@distube/ytdl-core');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -16,78 +17,120 @@ const supabaseUrl = 'https://lnjanjvnwjccfstmmtuo.supabase.co';
 const supabaseKey = 'sb_publishable_dpkjAjSKx1cgxczcjSbSAw_Arib-u0G'; 
 const _supabase = createClient(supabaseUrl, supabaseKey);
 
-console.log(">>> SISTEMA INICIADO EN PUERTO:", PORT);
+console.log(">>> SERVIDOR DE MÚSICA INICIADO EN PUERTO:", PORT);
 
-app.get('/', (req, res) => res.send("Servidor Activo 🚀"));
+// RUTA DE PRUEBA
+app.get('/', (req, res) => res.send("Servidor de José en la Nube 🚀"));
 
-// BUSCAR
+// BUSCAR CANCIONES (Usamos yt-dlp para buscar porque es más rápido)
 app.get('/search', (req, res) => {
     const query = req.query.q;
-    console.log(">>> PETICIÓN DE BÚSQUEDA:", query);
+    console.log(">>> BUSCANDO EN YOUTUBE:", query);
     
     const command = `./yt-dlp "ytsearch5:${query}" --dump-json --no-playlist --flat-playlist`;
     
     exec(command, (error, stdout) => {
         if (error) {
-            console.error(">>> ERROR EN BÚSQUEDA:", error.message);
+            console.error(">>> ERROR BÚSQUEDA:", error.message);
             return res.status(500).json({ error: error.message });
         }
-        const results = stdout.trim().split('\n').map(line => JSON.parse(line));
-        console.log(">>> BÚSQUEDA EXITOSA");
-        res.json(results);
+        try {
+            const results = stdout.trim().split('\n').map(line => {
+                const data = JSON.parse(line);
+                return {
+                    title: data.title,
+                    id: data.id,
+                    thumbnail: data.thumbnails ? data.thumbnails[0].url : '',
+                    channel: data.uploader || data.channel,
+                    url: `https://www.youtube.com/watch?v=${data.id}`
+                };
+            });
+            res.json(results);
+        } catch (e) {
+            res.status(500).json({ error: "Error procesando JSON de búsqueda" });
+        }
     });
 });
 
-// DESCARGAR
+// DESCARGAR Y SUBIR (Usamos ytdl-core para saltar el bloqueo de bots)
 app.post('/download', async (req, res) => {
-    const { title, artist, image } = req.body;
-    console.log(">>> INICIANDO DESCARGA PARA:", title);
+    const { title, artist, image, url } = req.body;
+    
+    if (!url) return res.status(400).json({ error: "Falta la URL del video" });
 
-    const videoUrl = `ytsearch1:"${title} ${artist}"`;
+    console.log(">>> INICIANDO PROCESO PARA:", title);
+
     const fileName = `${Date.now()}.mp3`;
     const outputFile = path.join('/tmp', fileName);
 
-    // Intentamos descargar directo (Render suele tener ffmpeg en el sistema por defecto)
-// Usamos --no-check-certificates y un User-Agent para parecer un navegador real
-const command = `./yt-dlp -x --audio-format mp3 --cookies cookies.txt --no-check-certificates -o "${outputFile}" ${videoUrl}`;
+    try {
+        // Configuramos la descarga simulando un cliente de Android para evitar bloqueos
+        const stream = ytdl(url, { 
+            filter: 'audioonly', 
+            quality: 'highestaudio',
+            requestOptions: {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Android 11; Mobile; rv:94.0) Gecko/94.0 Firefox/94.0'
+                }
+            }
+        });
 
-    exec(command, async (error) => {
-        if (error) {
-            console.error(">>> ERROR DESCARGANDO:", error.message);
-            return res.status(500).json({ error: error.message });
-        }
+        const fileStream = fs.createWriteStream(outputFile);
+        stream.pipe(fileStream);
 
-        try {
-            console.log(">>> LEYENDO ARCHIVO DE /tmp...");
-            const fileBuffer = fs.readFileSync(outputFile);
+        fileStream.on('finish', async () => {
+            console.log(">>> DESCARGA EXITOSA. LEYENDO ARCHIVO...");
+            
+            try {
+                const fileBuffer = fs.readFileSync(outputFile);
 
-            console.log(">>> SUBIENDO A SUPABASE STORAGE...");
-            const { error: uploadError } = await _supabase.storage
-                .from('songs')
-                .upload(`audios/${fileName}`, fileBuffer, { contentType: 'audio/mpeg' });
+                console.log(">>> SUBIENDO A SUPABASE STORAGE...");
+                const { error: uploadError } = await _supabase.storage
+                    .from('songs')
+                    .upload(`audios/${fileName}`, fileBuffer, { 
+                        contentType: 'audio/mpeg',
+                        upsert: true 
+                    });
 
-            if (uploadError) throw uploadError;
+                if (uploadError) throw uploadError;
 
-            const { data: { publicUrl } } = _supabase.storage.from('songs').getPublicUrl(`audios/${fileName}`);
+                const { data: { publicUrl } } = _supabase.storage.from('songs').getPublicUrl(`audios/${fileName}`);
 
-            console.log(">>> GUARDANDO EN BASE DE DATOS...");
-            const { error: dbError } = await _supabase.from('songs').insert([
-                { title, artist, image_url: image, audio_url: publicUrl }
-            ]);
+                console.log(">>> REGISTRANDO EN BASE DE DATOS...");
+                const { error: dbError } = await _supabase.from('songs').insert([
+                    { 
+                        title: title, 
+                        artist: artist, 
+                        image_url: image, 
+                        audio_url: publicUrl 
+                    }
+                ]);
 
-            if (dbError) throw dbError;
+                if (dbError) throw dbError;
 
-            fs.unlinkSync(outputFile);
-            console.log(">>> ¡TODO COMPLETADO CON ÉXITO!");
-            res.json({ success: true, url: publicUrl });
+                // Limpiar archivo temporal
+                if (fs.existsSync(outputFile)) fs.unlinkSync(outputFile);
+                
+                console.log(">>> ¡TODO LISTO! CANCIÓN DISPONIBLE EN LA APP.");
+                res.json({ success: true, url: publicUrl });
 
-        } catch (err) {
-            console.error(">>> ERROR EN PROCESO POST-DESCARGA:", err.message);
+            } catch (innerError) {
+                console.error(">>> ERROR EN SUBIDA:", innerError.message);
+                res.status(500).json({ error: innerError.message });
+            }
+        });
+
+        fileStream.on('error', (err) => {
+            console.error(">>> ERROR ESCRIBIENDO ARCHIVO:", err.message);
             res.status(500).json({ error: err.message });
-        }
-    });
+        });
+
+    } catch (err) {
+        console.error(">>> ERROR CRÍTICO YTDL:", err.message);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.listen(PORT, () => {
-    console.log(`>>> ESCUCHANDO EN PUERTO ${PORT}`);
+    console.log(`>>> SERVIDOR ESCUCHANDO EN EL PUERTO ${PORT}`);
 });
