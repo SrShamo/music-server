@@ -22,7 +22,7 @@ app.get('/search', (req, res) => {
     if (!query) return res.status(400).send('Falta la búsqueda');
 
     // En Linux usamos yt-dlp a secas
-    const command = `yt-dlp "ytsearch5:${query}" --get-title --get-id --get-thumbnail --print "%(uploader)s" --j`;
+const command = `./yt-dlp "ytsearch5:${query}" --get-title --get-id --get-thumbnail --print "%(uploader)s" --j`;
     
     exec(command, (error, stdout) => {
         if (error) return res.status(500).json({ error: error.message });
@@ -50,7 +50,7 @@ app.post('/download', async (req, res) => {
     const outputFile = path.join('/tmp', fileName); // En Render escribimos en /tmp
 
     // Comando para Linux (sin .exe)
-    const command = `yt-dlp -x --audio-format mp3 -o "${outputFile}" ${videoUrl}`;
+const command = `./yt-dlp -x --audio-format mp3 -o "${outputFile}" ${videoUrl}`;
 
     exec(command, async (error) => {
         if (error) return res.status(500).json({ error: error.message });
