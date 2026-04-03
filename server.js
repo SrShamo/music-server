@@ -1,86 +1,83 @@
 const express = require('express');
-const cors = require('cors');
+const { createClient } = require('@supabase/supabase-js');
 const { exec } = require('child_process');
+const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { createClient } = require('@supabase/supabase-js');
-const YouTube = require('youtube-sr').default;
 
 const app = express();
+// Render asigna el puerto automáticamente, por eso usamos process.env.PORT
+const PORT = process.env.PORT || 3000;
+
 app.use(cors());
 app.use(express.json());
 
-const supabase = createClient('https://lnjanjvnwjccfstmmtuo.supabase.co', 'sb_secret_7LpsFc69GTqOeQP-mfxivw_96rPlBSL');
+const supabaseUrl = 'https://lnjanjvnwjccfstmmtuo.supabase.co';
+const supabaseKey = 'sb_publishable_dpkjAjSKx1cgxczcjSbSAw_Arib-u0G'; // Usa tu Service Role Key si da error de permisos
+const _supabase = createClient(supabaseUrl, supabaseKey);
 
-app.get('/search', async (req, res) => {
+// RUTA DE BÚSQUEDA
+app.get('/search', (req, res) => {
     const query = req.query.q;
-    try {
-        const videos = await YouTube.search(query, { limit: 10, type: 'video' });
-        const results = videos.map(v => ({
-            title: v.title,
-            thumbnail: v.thumbnail.url,
-            // Capturamos el nombre del canal aquí
-            channel: v.channel ? v.channel.name : "YouTube Artist",
-            url: v.url
-        }));
+    if (!query) return res.status(400).send('Falta la búsqueda');
+
+    // En Linux usamos yt-dlp a secas
+    const command = `yt-dlp "ytsearch5:${query}" --get-title --get-id --get-thumbnail --print "%(uploader)s" --j`;
+    
+    exec(command, (error, stdout) => {
+        if (error) return res.status(500).json({ error: error.message });
+        
+        const lines = stdout.trim().split('\n');
+        const results = lines.map(line => {
+            const data = JSON.parse(line);
+            return {
+                title: data.title,
+                id: data.id,
+                thumbnail: data.thumbnail,
+                channel: data.uploader,
+                url: `https://www.youtube.com/watch?v=${data.id}`
+            };
+        });
         res.json(results);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+    });
 });
 
+// RUTA DE DESCARGA Y SUBIDA
 app.post('/download', async (req, res) => {
     const { title, artist, image } = req.body;
-    const uniqueId = Date.now();
-    const tempName = `temp_${uniqueId}`;
+    const videoUrl = `ytsearch1:"${title} ${artist}"`;
+    const fileName = `${Date.now()}.mp3`;
+    const outputFile = path.join('/tmp', fileName); // En Render escribimos en /tmp
 
-    try {
-        const command = `yt-dlp -x --audio-format mp3 --ffmpeg-location /usr/bin/ffmpeg -o "${outputFile}" ${videoUrl}`;
+    // Comando para Linux (sin .exe)
+    const command = `yt-dlp -x --audio-format mp3 -o "${outputFile}" ${videoUrl}`;
 
-        exec(command, async (error, stdout, stderr) => {
-            if (error) {
-                return res.status(500).json({ error: error.message });
-            }
+    exec(command, async (error) => {
+        if (error) return res.status(500).json({ error: error.message });
 
-            try {
-                const files = fs.readdirSync(__dirname);
-                const downloadedFile = files.find(f => f.startsWith(tempName));
+        const fileBuffer = fs.readFileSync(outputFile);
 
-                if (!downloadedFile) throw new Error("Archivo no encontrado");
+        // Subir a Supabase Storage
+        const { data, error: uploadError } = await _supabase.storage
+            .from('songs')
+            .upload(`audios/${fileName}`, fileBuffer, { contentType: 'audio/mpeg' });
 
-                const filePath = path.join(__dirname, downloadedFile);
-                const fileBuffer = fs.readFileSync(filePath);
-                const ext = path.extname(downloadedFile);
-                const finalName = `hq_${uniqueId}${ext}`;
+        if (uploadError) return res.status(500).json({ error: uploadError.message });
 
-                const { error: uploadError } = await supabase.storage
-                    .from('Musics')
-                    .upload(`scraped/${finalName}`, fileBuffer, { 
-                        contentType: ext === '.m4a' ? 'audio/mp4' : 'audio/webm',
-                        upsert: true
-                    });
+        const { data: { publicUrl } } = _supabase.storage.from('songs').getPublicUrl(`audios/${fileName}`);
 
-                if (uploadError) throw uploadError;
+        // Guardar en la tabla de la base de datos
+        const { error: dbError } = await _supabase.from('songs').insert([
+            { title, artist, image_url: image, audio_url: publicUrl }
+        ]);
 
-                const { data: urlData } = supabase.storage.from('Musics').getPublicUrl(`scraped/${finalName}`);
+        fs.unlinkSync(outputFile); // Borrar archivo temporal
 
-                await supabase.from('songs').insert([{
-                    title, 
-                    artist, 
-                    image_url: image, 
-                    audio_url: urlData.publicUrl
-                }]);
-
-                fs.unlinkSync(filePath);
-                res.json({ success: true });
-
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+        if (dbError) return res.status(500).json({ error: dbError.message });
+        res.json({ success: true, url: publicUrl });
+    });
 });
 
-app.listen(3000, () => console.log('Servidor 320kbps listo en puerto 3000'));
+app.listen(PORT, () => {
+    console.log(`Servidor corriendo en el puerto ${PORT}`);
+});
