@@ -1,20 +1,15 @@
 {
-  "name": "server",
+  "name": "music-server",
   "version": "1.0.0",
+  "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp && chmod a+rx yt-dlp"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
-    "@supabase/supabase-js": "^2.101.1",
-    "cors": "^2.8.6",
-    "express": "^5.2.1",
-    "youtube-sr": "^4.3.12"
+    "express": "^4.18.2",
+    "@supabase/supabase-js": "^2.38.4",
+    "cors": "^2.8.5"
   }
 }
