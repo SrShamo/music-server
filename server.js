@@ -48,7 +48,8 @@ app.post('/download', async (req, res) => {
     const outputFile = path.join('/tmp', fileName);
 
     // Intentamos descargar directo (Render suele tener ffmpeg en el sistema por defecto)
-    const command = `./yt-dlp -x --audio-format mp3 -o "${outputFile}" ${videoUrl}`;
+// Usamos --no-check-certificates y un User-Agent para parecer un navegador real
+const command = `./yt-dlp -x --audio-format mp3 --no-check-certificates --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -o "${outputFile}" ${videoUrl}`;
 
     exec(command, async (error) => {
         if (error) {
