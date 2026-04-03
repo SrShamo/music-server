@@ -47,34 +47,48 @@ app.post('/download', async (req, res) => {
     const { title, artist, image } = req.body;
     const videoUrl = `ytsearch1:"${title} ${artist}"`;
     const fileName = `${Date.now()}.mp3`;
-    const outputFile = path.join('/tmp', fileName); // En Render escribimos en /tmp
+    const outputFile = path.join('/tmp', fileName);
 
-    // Comando para Linux (sin .exe)
-const command = `./yt-dlp -x --audio-format mp3 -o "${outputFile}" ${videoUrl}`;
+    // USAMOS EL FFMPEG LOCAL (./ffmpeg)
+    const command = `./yt-dlp -x --audio-format mp3 --ffmpeg-location ./ffmpeg -o "${outputFile}" ${videoUrl}`;
+
+    console.log("Descargando:", title);
 
     exec(command, async (error) => {
-        if (error) return res.status(500).json({ error: error.message });
+        if (error) {
+            console.error("Error yt-dlp:", error.message);
+            return res.status(500).json({ error: error.message });
+        }
 
-        const fileBuffer = fs.readFileSync(outputFile);
+        try {
+            const fileBuffer = fs.readFileSync(outputFile);
+            console.log("Subiendo a Supabase...");
 
-        // Subir a Supabase Storage
-        const { data, error: uploadError } = await _supabase.storage
-            .from('songs')
-            .upload(`audios/${fileName}`, fileBuffer, { contentType: 'audio/mpeg' });
+            const { data, error: uploadError } = await _supabase.storage
+                .from('songs')
+                .upload(`audios/${fileName}`, fileBuffer, { 
+                    contentType: 'audio/mpeg',
+                    upsert: true 
+                });
 
-        if (uploadError) return res.status(500).json({ error: uploadError.message });
+            if (uploadError) throw uploadError;
 
-        const { data: { publicUrl } } = _supabase.storage.from('songs').getPublicUrl(`audios/${fileName}`);
+            const { data: { publicUrl } } = _supabase.storage.from('songs').getPublicUrl(`audios/${fileName}`);
 
-        // Guardar en la tabla de la base de datos
-        const { error: dbError } = await _supabase.from('songs').insert([
-            { title, artist, image_url: image, audio_url: publicUrl }
-        ]);
+            const { error: dbError } = await _supabase.from('songs').insert([
+                { title, artist, image_url: image, audio_url: publicUrl }
+            ]);
 
-        fs.unlinkSync(outputFile); // Borrar archivo temporal
+            if (dbError) throw dbError;
 
-        if (dbError) return res.status(500).json({ error: dbError.message });
-        res.json({ success: true, url: publicUrl });
+            fs.unlinkSync(outputFile);
+            console.log("¡Todo listo!");
+            res.json({ success: true, url: publicUrl });
+
+        } catch (err) {
+            console.error("Error proceso:", err.message);
+            res.status(500).json({ error: err.message });
+        }
     });
 });
 
